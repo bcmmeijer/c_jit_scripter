@@ -91,7 +91,7 @@ public:
 
 private:
     template <typename T, typename ... Args>
-    typename return_type<T>::type _runner(const char* entry, Args ... args) {
+    typename return_type<T>::type _runner(const char* entry_name, Args ... args) {
         constexpr bool argc = sizeof ... (args) != 0;
 
         using ret = typename return_type<T>::type;
@@ -99,19 +99,20 @@ private:
 
         defer _(nullptr, [this](...) { this->reinit(); });
 
-        auto e = get_symbol<T(*)(Args...)>(entry);
-        if (!e) return (ret)0;
+        auto entry = get_symbol<T(*)(Args...)>(entry_name);
+        if (!entry) return (ret)0;
 
         if constexpr (std::is_same<T, void>::value) {
-            if constexpr (argc) e(args...);
-            else e();
+            if constexpr (argc) entry(args...);
+            else entry();
             return (ret)0;
         }
         else {
-            T r;
-            if constexpr (argc) r = e(args...);
-            else r = e();
-            return r;
+            T retval;
+            if constexpr (argc) 
+                retval = entry(args...);
+            else retval = entry();
+            return retval;
         }
     }
 
@@ -119,7 +120,7 @@ private:
 };
 
 void test_module_print() { 
-    printf("nyaanyaa\n"); 
+    printf("test from script to internal\n");
 }
 
 struct _test_module {
@@ -145,15 +146,14 @@ static void* function_resolver(const char* dll, const char* proc) {
 }
 
 int main(int argc, char** argv) {
-
     tcc runner;
 
     runner.init();
     runner.add_symbol("require", module_require);
     runner.add_symbol("resolver", function_resolver);
 
-    auto f = runner.run_file<int>("script.c", "entry", 0, nullptr);
-    auto z = runner.run_string<void>(R"( 
+    auto& [script_status, script_return] = runner.run_file<int>("script.c", "entry", 0, nullptr);
+    auto& [string_status, string_return] = runner.run_string<void>(R"( 
 
     int printf(const char*, ...);
     void entry(){ 
