@@ -28,3 +28,7 @@
 # Executables
 *.out
 *.app
+CScripter.sln
+*.vcxproj
+*.user
+.vs
