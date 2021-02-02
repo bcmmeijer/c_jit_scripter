@@ -6,8 +6,17 @@
 #include <Windows.h>
 #include <functional>
 #include <cassert>
+#include <sstream>
 
 #include "libtcc.h"
+#include "ioredirect.hpp"
+
+using _defer = std::shared_ptr<void>;
+#define defer(x, code) _defer x(nullptr, [&](...){ code; })
+
+template <typename T> struct return_type { using type = T; };
+template <>           struct return_type<void> { using type = bool; };
+template <typename T> using  return_type_t = typename return_type<T>::type;
 
 class tcc {
 public:
@@ -66,49 +75,55 @@ public:
         return tcc_add_symbol(_s, symbol, ptr);
     }
 
-    template <typename T>
-    struct return_type {
-        using type = T;
-    };
-
-    template<>
-    struct return_type<void> {
-        using type = bool;
-    };
 
     template <typename T, typename ... Args>
-    std::pair<bool, typename return_type<T>::type> run_string(const char* str, const char* entry, Args ... args) {
+    std::pair<bool, return_type_t<T>> run_string(const char* str, const char* entry, Args ... args) {
         if (!compile_string(str))
-            return { false, return_type<T>::type(0) };
+            return { false, return_type_t<T>(0) };
         return { true, _runner<T>(entry, std::forward<Args>(args)...) };
     }
 
     template <typename T, typename ... Args>
-    std::pair<bool, typename return_type<T>::type> run_file(const char* file, const char* entry, Args ... args) {
+    std::pair<bool, return_type_t<T>> run_file(const char* file, const char* entry, Args ... args) {
         if (!compile_file(file))
-            return { false, return_type<T>::type(0) };
+            return { false, return_type_t<T>(0) };
         return { true, _runner<T>(entry, std::forward<Args>(args)...) };
     }
+
+    std::stringstream& get_stdout() { return _ss; }
 
 private:
-    template <typename T, typename ... Args>
-    typename return_type<T>::type _runner(const char* entry, Args ... args) {
-        constexpr bool argc = sizeof ... (args) != 0;
-        using ret = typename return_type<T>::type;
-        using defer = std::shared_ptr<void>;
 
-        defer _(nullptr, [this](...) { this->reinit(); });
+    void stdio_redirect(bool enable = true) {
+        static io_redirect io;
+        if (enable) {
+            io.Init();
+            io.BeginCapture();
+        }
+        else {
+            io.EndCapture();
+            _ss << io.GetCapture();
+        }
+    }
+
+    template <typename T, typename ... Args>
+    return_type_t<T> _runner(const char* entry, Args ... args) {
+        constexpr bool argc = sizeof ... (args) != 0;
+        defer(do_reinit, this->reinit());
 
         auto e = get_symbol<T(*)(Args...)>(entry);
-        if (!e) return (ret)0;
+        if (!e) return return_type_t < T>(0);
+
+        stdio_redirect();
+        defer(do_restore_redirect, stdio_redirect(false));
 
         if constexpr (std::is_same_v<T, void>) {
             if constexpr (argc) e(args...);
             else e();
-            return (ret)0;
+            return return_type_t < T>(0);
         }
         else {
-            T r;
+            return_type_t<T> r;
             if constexpr (argc) r = e(args...);
             else r = e();
             return r;
@@ -117,6 +132,7 @@ private:
 
 private:
     TCCState* _s;
+    std::stringstream _ss;
 };
 
 void test_module_print() { 
@@ -151,13 +167,15 @@ int main(int argc, char** argv) {
     runner.add_symbol("resolver", function_resolver);
 
     runner.compile_string("int add_me(int x, int y) { return x + y; }");
-
     auto [success, ret] = runner.run_string<int>(R"(
-        int a(int x, int y) { 
-            return add_me(x, y); 
+        int a(int x, int y) {
+            int res = add_me(x, y);
+            printf("result of add_me: %d\n", res);
+            return res;
         })","a", 10, 10);
 
     assert(ret == 20);
+    printf("program output:\n%s\n", runner.get_stdout().str().c_str());
 
     return 0;
 }

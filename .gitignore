@@ -32,3 +32,4 @@ CScripter.sln
 *.vcxproj
 *.user
 .vs
+bin/
